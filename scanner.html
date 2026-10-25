@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OWWA RWO III - QR Scanner</title>
+<style>
+:root{--teal:#0f766e;--teal2:#14b8a6;--amber:#f59e0b;--red:#b91c1c;--bg:#0b3d3d;--text:#1f2937;--muted:#6b7280}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#fff}
+.wrap{max-width:520px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 14px max(18px,env(safe-area-inset-bottom))}
+h1{font-size:18px;margin:6px 0 2px}.sub{font-size:13px;color:#b8d8d5;margin:0 0 12px}
+.cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:3/4;max-height:62vh;width:100%}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.frame{position:absolute;inset:0;margin:auto;width:62%;aspect-ratio:1;pointer-events:none;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.38)}
+.frame i{position:absolute;width:26px;height:26px;border:4px solid var(--amber)}
+.frame i:nth-child(1){left:0;top:0;border-right:0;border-bottom:0;border-radius:10px 0 0 0}.frame i:nth-child(2){right:0;top:0;border-left:0;border-bottom:0;border-radius:0 10px 0 0}
+.frame i:nth-child(3){left:0;bottom:0;border-right:0;border-top:0;border-radius:0 0 0 10px}.frame i:nth-child(4){right:0;bottom:0;border-left:0;border-top:0;border-radius:0 0 10px 0}
+.frame b{position:absolute;left:6%;right:6%;top:0;height:2px;background:var(--teal2);box-shadow:0 0 8px var(--teal2);animation:sweep 2s ease-in-out infinite alternate}
+@keyframes sweep{to{top:calc(100% - 2px)}}
+#msg{min-height:44px;margin:12px 0;font-size:14px;line-height:1.45}#msg.bad{color:#fecaca;font-weight:600}#msg.ok{color:#bbf7d0;font-weight:600}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:13px 14px;margin-bottom:10px;border:0;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;color:#fff;background:var(--teal)}
+.btn.amber{background:var(--amber);color:#1f2937}.btn.ghost{background:rgba(255,255,255,.12)}.hidden{display:none!important}
+.row{display:flex;gap:8px}.row input{flex:1;min-width:0;padding:12px;border-radius:10px;border:0;font-size:15px;text-transform:uppercase}.row .btn{width:auto;margin:0;padding:12px 18px}
+details{margin-top:6px;background:rgba(255,255,255,.08);border-radius:10px;padding:10px 12px}summary{cursor:pointer;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OWWA RWO III &mdash; Scan Equipment QR</h1>
+  <p class="sub">Point the camera at the QR sticker. The equipment record opens automatically.</p>
+
+  <div class="cam"><video id="v" playsinline muted autoplay></video><div class="frame"><i></i><i></i><i></i><i></i><b></b></div></div>
+  <div id="msg">Starting camera...</div>
+
+  <button class="btn amber hidden" id="startBtn">Start Camera</button>
+  <button class="btn ghost hidden" id="torchBtn">Turn Flashlight On</button>
+  <a class="btn ghost" id="backLink" href="#">Back to the Inventory System</a>
+
+  <details>
+    <summary>Camera not working? Type a number instead</summary>
+    <p style="font-size:13px;color:#b8d8d5">Take or choose a photo of the QR code, or type the property number or serial number.</p>
+    <input type="file" id="pic" accept="image/*" capture="environment" class="hidden">
+    <button class="btn" id="picBtn">Take Photo of QR Code</button>
+    <div class="row"><input id="manual" placeholder="Property no. or serial no."><button class="btn amber" id="goBtn">Open</button></div>
+  </details>
+</div>
+
+<script>
+/* ============ SETTINGS - edit these two lines ============ */
+var APP_URL = 'https://script.google.com/macros/s/AKfycbwEb3Go1-ezyCe_l7eW8rPl9W-V7Qp7DMb7MCvhLha2/dev';   // the Apps Script web app link that ends in /exec
+/* ========================================================= */
+</script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var video = $('#v'), msg = $('#msg'), stream = null, timer = null, decoder = null, found = false;
+
+function say(t, cls) { msg.textContent = t; msg.className = cls || ''; }
+function appLink(id) { return APP_URL + (APP_URL.indexOf('?') < 0 ? '?' : '&') + 'id=' + encodeURIComponent(id); }
+$('#backLink').href = /^https:/.test(APP_URL) ? APP_URL : '#';
+
+/* Camera scans: accepts our QR link (?id=...) or a plain item ID (new RWO3-yymmdd-### or older OWWA-RWO3-yyyy-####). Anything else is not ours. */
+function parseScan(t) {
+  t = String(t || '').trim(); var id = '';
+  try { id = new URL(t).searchParams.get('id') || ''; } catch (e) {}
+  id = (id || t).trim().toUpperCase();
+  return /^(RWO3-\d{6}-\d{3,}|OWWA-RWO3-\d{4}-\d{4,})$/.test(id) ? id : '';
+}
+
+function openRecord(id) {
+  if (found) return; found = true; stop();
+  say('Found ' + id + ' - opening record...', 'ok');
+  if (navigator.vibrate) try { navigator.vibrate(120); } catch (e) {}
+  setTimeout(function () { location.href = appLink(id); }, 350);
+}
+
+async function makeDecoder() {
+  if ('BarcodeDetector' in window) {
+    try {
+      var f = await BarcodeDetector.getSupportedFormats();
+      if (f.indexOf('qr_code') >= 0) { var d = new BarcodeDetector({ formats: ['qr_code'] }); return async function (src) { var r = await d.detect(src); return r.length ? r[0].rawValue : ''; }; }
+    } catch (e) {}
+  }
+  if (!window.jsQR) throw Object.assign(new Error('QR reader could not load'), { name: 'NoDecoder' });
+  var c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
+  return async function (src, max) {
+    var w = src.videoWidth || src.naturalWidth || src.width, h = src.videoHeight || src.naturalHeight || src.height;
+    if (!w || !h) return '';
+    var s = Math.min(1, (max || 720) / Math.max(w, h));
+    c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+    x.drawImage(src, 0, 0, c.width, c.height);
+    var d = x.getImageData(0, 0, c.width, c.height), r = jsQR(d.data, d.width, d.height, { inversionAttempts: 'attemptBoth' });
+    return r ? r.data : '';
+  };
+}
+
+function friendly(e) {
+  var n = (e && e.name) || '';
+  if (/FBAN|FBAV|Messenger|Viber|Instagram|Line\//i.test(navigator.userAgent)) return 'This link is open inside another app (Messenger, Viber, etc.), which blocks the camera. Open it in Chrome or Safari instead.';
+  if (n === 'NotAllowedError' || n === 'SecurityError' || n === 'PermissionDeniedError') return 'Camera permission is blocked. Tap the lock icon in the address bar, set Camera to Allow, then tap Start Camera.';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'No camera was found on this device. Use the photo or number option below.';
+  if (n === 'NotReadableError') return 'The camera is being used by another app or tab. Close it, then tap Start Camera.';
+  if (n === 'NoDecoder') return 'The QR reader could not load. Check your internet connection and reload.';
+  return 'The camera could not start' + (n ? ' (' + n + ')' : '') + '. Use the photo or number option below.';
+}
+
+async function start() {
+  $('#startBtn').classList.add('hidden'); found = false; say('Starting camera...');
+  try {
+    if (!window.isSecureContext) throw Object.assign(new Error('insecure'), { name: 'SecurityError' });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error('unsupported'), { name: 'NotFoundError' });
+    decoder = decoder || await makeDecoder();
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+    catch (e) { if (e && e.name === 'NotAllowedError') throw e; stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+    video.srcObject = stream; await video.play();
+    say('Point the camera at the QR code.');
+    var tr = stream.getVideoTracks()[0], caps = tr.getCapabilities ? tr.getCapabilities() : {};
+    if (caps.torch) $('#torchBtn').classList.remove('hidden');
+    var busy = false;
+    timer = setInterval(async function () {
+      if (busy || found || video.readyState < 2) return; busy = true;
+      try { var t = await decoder(video, 720); if (t) { var id = parseScan(t); if (id) openRecord(id); else say('Invalid QR Code. Try again.', 'bad'); } } catch (e) {}
+      busy = false;
+    }, 250);
+  } catch (e) {
+    say(friendly(e), 'bad'); $('#startBtn').classList.remove('hidden');
+  }
+}
+function stop() { clearInterval(timer); timer = null; if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; } }
+
+var torchOn = false;
+$('#torchBtn').onclick = async function () {
+  try { torchOn = !torchOn; await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: torchOn }] }); this.textContent = torchOn ? 'Turn Flashlight Off' : 'Turn Flashlight On'; }
+  catch (e) { torchOn = false; }
+};
+$('#startBtn').onclick = start;
+$('#picBtn').onclick = function () { $('#pic').click(); };
+$('#pic').onchange = async function (e) {
+  var f = e.target.files[0]; if (!f) return; say('Reading photo...');
+  try {
+    decoder = decoder || await makeDecoder();
+    var bmp = window.createImageBitmap ? await createImageBitmap(f) : await new Promise(function (res, rej) { var im = new Image(); im.onload = function () { res(im); }; im.onerror = rej; im.src = URL.createObjectURL(f); });
+    var t = await decoder(bmp, 2000), id = parseScan(t);
+    if (id) openRecord(id); else say(t ? 'Invalid QR Code. Try again.' : 'No QR code found in that photo. Try again.', 'bad');
+  } catch (x) { say('Could not read that photo. Try again.', 'bad'); }
+  e.target.value = '';
+};
+function manual() { var v = $('#manual').value.trim().toUpperCase(); if (v) openRecord(v); else say('Enter a property number or serial number first.', 'bad'); }
+$('#goBtn').onclick = manual; $('#manual').onkeydown = function (e) { if (e.key === 'Enter') manual(); };
+document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else if (!found && !stream) start(); });
+
+if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(APP_URL)) say('Setup needed: edit APP_URL at the top of this file and paste your Apps Script web app link (ending in /exec).', 'bad');
+else start();
+</script>
+</body>
+</html>
