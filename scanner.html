@@ -43,12 +43,24 @@ details{margin-top:6px;background:rgba(255,255,255,.08);border-radius:10px;paddi
     <button class="btn" id="picBtn">Take Photo of QR Code</button>
     <div class="row"><input id="manual" placeholder="Property no. or serial no."><button class="btn amber" id="goBtn">Open</button></div>
   </details>
+  <p id="ver" style="font-size:11px;color:#8fb5b1;margin-top:14px;word-break:break-all"></p>
 </div>
 
 <script>
 /* ============ SETTINGS - edit these two lines ============ */
-var APP_URL = 'https://script.google.com/macros/s/AKfycbwEb3Go1-ezyCe_l7eW8rPl9W-V7Qp7DMb7MCvhLha2/dev';   // the Apps Script web app link that ends in /exec
+var APP_URL = 'https://script.google.com/macros/s/AKfycbwEb3Go1-ezyCe_l7eW8rPl9W-V7Qp7DMb7MCvhLha2/dev';   // optional: the Apps Script web app link that ends in /exec
 /* ========================================================= */
+/* The inventory system sends its own public (/exec) link with the Scan Another Item button (?app=...), and this page remembers it.
+   A link ending in /dev only works for the editors and asks everyone else to sign in, so it is never used. */
+var EXEC_RE = /^https:\/\/script\.google\.com\/.+\/exec$/;
+(function () {
+  try {
+    var p = new URLSearchParams(location.search).get('app');
+    if (p && EXEC_RE.test(p)) localStorage.setItem('owwaApp', p);
+    var saved = localStorage.getItem('owwaApp');
+    if (saved && EXEC_RE.test(saved)) APP_URL = saved;
+  } catch (e) {}
+})();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
@@ -57,7 +69,8 @@ var video = $('#v'), msg = $('#msg'), stream = null, timer = null, decoder = nul
 
 function say(t, cls) { msg.textContent = t; msg.className = cls || ''; }
 function appLink(id) { return APP_URL + (APP_URL.indexOf('?') < 0 ? '?' : '&') + 'id=' + encodeURIComponent(id); }
-$('#backLink').href = /^https:/.test(APP_URL) ? APP_URL : '#';
+document.getElementById('ver').textContent = 'Scanner v2 - opens: ' + (EXEC_RE.test(APP_URL) ? APP_URL.replace(/^https:\/\//, '') : 'not set');
+$('#backLink').href = EXEC_RE.test(APP_URL) ? APP_URL : '#';
 
 /* Camera scans: accepts our QR link (?id=...) or a plain item ID (new RWO3-yymmdd-### or older OWWA-RWO3-yyyy-####). Anything else is not ours. */
 function parseScan(t) {
@@ -149,7 +162,7 @@ function manual() { var v = $('#manual').value.trim().toUpperCase(); if (v) open
 $('#goBtn').onclick = manual; $('#manual').onkeydown = function (e) { if (e.key === 'Enter') manual(); };
 document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else if (!found && !stream) start(); });
 
-if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(APP_URL)) say('Setup needed: edit APP_URL at the top of this file and paste your Apps Script web app link (ending in /exec).', 'bad');
+if (!EXEC_RE.test(APP_URL)) say('Setup needed: open this scanner once from the inventory page (tap Scan Another Item), or paste your Apps Script web app link ending in /exec into APP_URL at the top of this file.', 'bad');
 else start();
 </script>
 </body>
